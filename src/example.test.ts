@@ -1,30 +1,79 @@
 import {
   Collection,
-  DecimalType,
-  defineConfig,
-  Embedded,
   Entity,
   ManyToOne,
   MikroORM,
   OneToMany,
   PrimaryKey,
   Property,
-} from "@mikro-orm/postgresql";
-import { Money } from "./money.embeddable";
+} from "@mikro-orm/sqlite";
+import {
+  Type,
+  Platform,
+  EntityProperty,
+  ValidationError,
+} from "@mikro-orm/core";
+import { uuidv7 } from "uuidv7";
+
+export class IdentityType extends String {
+  constructor(id = uuidv7()) {
+    super(id);
+  }
+
+  public isEqual(to: IdentityType) {
+    return this.valueOf() === to.valueOf();
+  }
+}
+
+export class MikroormIdentityType<SubType> extends Type<IdentityType, string> {
+  private className;
+
+  constructor(className: new (value: string) => SubType) {
+    super();
+    this.className = className;
+  }
+
+  convertToDatabaseValue(value: IdentityType | string): string {
+    if (typeof value === "object") {
+      if (!(value instanceof IdentityType)) {
+        throw ValidationError.invalidType(MikroormIdentityType, value, "JS");
+      }
+      return value.toString();
+    } else if (typeof value === "string" && value) {
+      return value;
+    }
+
+    throw ValidationError.invalidType(MikroormIdentityType, value, "JS");
+  }
+
+  compareValues(a: IdentityType | string, b: IdentityType | string): boolean {
+    return a.valueOf() === b.valueOf();
+  }
+
+  convertToJSValue(value: IdentityType | string | undefined): IdentityType {
+    if (!value || value instanceof IdentityType) {
+      return value as IdentityType;
+    }
+
+    return new this.className(value) as IdentityType;
+  }
+
+  getColumnType(prop: EntityProperty, platform: Platform) {
+    return platform.getUuidTypeDeclarationSQL({
+      length: 36,
+    });
+  }
+}
 
 @Entity({ tableName: "test_user" })
 class User {
-  @PrimaryKey()
-  id!: number;
+  @PrimaryKey({
+    type: new MikroormIdentityType<IdentityType>(IdentityType),
+  })
+  id: IdentityType = new IdentityType();
 
   @Property()
   name: string;
-
-  @Property()
-  email: string;
-
-  @Property({ type: "decimal", scale: 2 })
-  decimal: number | null = null;
 
   @OneToMany<Book, User>({
     entity: () => Book,
@@ -35,36 +84,21 @@ class User {
   })
   books = new Collection<Book, this>(this);
 
-  constructor(
-    id: number,
-    name: string,
-    email: string,
-    decimal: number | null = null
-  ) {
+  constructor(id: IdentityType, name: string) {
     this.id = id;
     this.name = name;
-    this.email = email;
-    this.decimal = decimal;
   }
 }
 
 @Entity({ tableName: "test_books" })
 class Book {
-  @PrimaryKey()
-  id!: number;
+  @PrimaryKey({
+    type: new MikroormIdentityType<IdentityType>(IdentityType),
+  })
+  id: IdentityType = new IdentityType();
 
   @Property()
   name: string;
-
-  @Property({
-    type: new DecimalType("number"),
-    runtimeType: "number",
-    scale: 2,
-  })
-  decimalAmount: number;
-
-  @Embedded(() => Money)
-  price: Money;
 
   @ManyToOne<Book, User>({
     entity: () => User,
@@ -72,146 +106,53 @@ class Book {
   })
   user: User;
 
-  constructor(
-    id: number,
-    name: string,
-    decimalAmount: number,
-    price: Money,
-    user: User
-  ) {
+  constructor(id: IdentityType, name: string, user: User) {
     this.id = id;
     this.name = name;
-    this.decimalAmount = decimalAmount;
-    this.price = price;
     this.user = user;
   }
 }
 
-describe("should not update entities just for find them inside a transaction", () => {
-  let orm: MikroORM;
-  let loggerMessages: string[] = [];
+let orm: MikroORM;
 
-  beforeAll(async () => {
-    orm = await MikroORM.init(
-      defineConfig({
-        clientUrl: "postgresql://admin:admin@localhost:5432/admin_api",
-        entities: [User, Book],
-        debug: ["query", "query-params"],
-        allowGlobalContext: true, // only for testing
-        forceEntityConstructor: true,
-        logger: (message: string) => {
-          loggerMessages.push(message);
-        },
-      })
+beforeAll(async () => {
+  orm = await MikroORM.init({
+    dbName: ":memory:",
+    entities: [User, Book],
+    debug: false,
+    allowGlobalContext: true, // only for testing
+    forceEntityConstructor: true,
+  });
+  await orm.schema.refreshDatabase();
+});
+
+afterAll(async () => {
+  await orm.close(true);
+});
+
+test("should don't throw error on custom type", async () => {
+  const userId = new IdentityType();
+  const bookId = new IdentityType();
+
+  await orm.em.transactional(async () => {
+    const user = orm.em.create(User, {
+      id: userId,
+      name: "Foo",
+    });
+    user.books.add(new Book(bookId, "book-1", user));
+  });
+
+  orm.em.clear();
+
+  await orm.em.transactional(async () => {
+    await orm.em.findOne(
+      Book,
+      {
+        id: bookId,
+      },
+      {
+        populate: ["user"],
+      }
     );
-    await orm.schema.refreshDatabase();
-  });
-
-  beforeEach(() => {
-    loggerMessages = [];
-  });
-
-  afterAll(async () => {
-    await orm.close(true);
-  });
-
-  test("should not update book entity when findOne a user WITHOUT books", async () => {
-    await orm.em.transactional(async () => {
-      const user = orm.em.create(User, {
-        id: 1,
-        name: "Foo",
-        email: "foo",
-        decimal: 2.22,
-      });
-      user.books.add(
-        new Book(1, "book-1", 11.45, new Money(10.54, "USD"), user)
-      );
-    });
-
-    orm.em.clear();
-
-    await orm.em.transactional(async () => {
-      await orm.em.findOne(User, {
-        id: 1,
-      });
-    });
-
-    const unwantedUpdate = loggerMessages.find((message: string) => {
-      return /(update|(update \"test_books\" set \"decimal_amount\" = 11.45, \"price_amount\" = 10.54 where \"id\" = 1))/gi.test(
-        message
-      );
-    });
-
-    expect(unwantedUpdate).toBeFalsy();
-  });
-
-  test("should not update book entity when findOne a user WITH books", async () => {
-    await orm.em.transactional(async () => {
-      const user = orm.em.create(User, {
-        id: 2,
-        name: "Foo",
-        email: "foo",
-        decimal: 2.22,
-      });
-      user.books.add(
-        new Book(2, "book-2", 11.45, new Money(10.54, "USD"), user)
-      );
-    });
-
-    orm.em.clear();
-
-    await orm.em.transactional(async () => {
-      await orm.em.findOne(
-        User,
-        {
-          id: 2,
-        },
-        {
-          populate: ["books"],
-        }
-      );
-    });
-
-    const unwantedUpdate = loggerMessages.find((message: string) => {
-      return /(update|(update \"test_books\" set \"decimal_amount\" = 11.45, \"price_amount\" = 10.54 where \"id\" = 1))/gi.test(
-        message
-      );
-    });
-
-    expect(unwantedUpdate).toBeFalsy();
-  });
-
-  test("should not update book entities when find them after creating using constructors", async () => {
-    await orm.em.transactional(async (em) => {
-      const user = new User(3, "Foo", "foo", 2.22);
-      const book = new Book(3, "book-3", 11.45, new Money(10.54, "USD"), user);
-
-      user.books.add(book);
-
-      em.persist(user);
-      em.persist(book);
-    });
-
-    orm.em.clear();
-
-    await orm.em.transactional(async () => {
-      await orm.em.findOne(
-        User,
-        {
-          id: 3,
-        },
-        {
-          populate: ["books"],
-        }
-      );
-    });
-
-    const unwantedUpdate = loggerMessages.find((message: string) => {
-      return /(update|(update \"test_books\" set \"decimal_amount\" = 11.45, \"price_amount\" = 10.54 where \"id\" = 1))/gi.test(
-        message
-      );
-    });
-
-    expect(unwantedUpdate).toBeFalsy();
   });
 });
