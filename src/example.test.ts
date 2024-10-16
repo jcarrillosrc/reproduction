@@ -145,6 +145,67 @@ describe("should not update entities just for find them inside a transaction", (
     expect(unwantedUpdate).toBeFalsy();
   });
 
+
+  test("should not update book entity when findOne Book when decimals are zeros", async () => {
+    await orm.em.transactional(async () => {
+      const user = orm.em.create(User, {
+        id: 5,
+        name: "Foo",
+        email: "foo",
+        decimal: 2,
+      });
+      user.books.add(
+        new Book(5, "book-1", 11.00, new Money(10.00, "USD"), user)
+      );
+    });
+
+    orm.em.clear();
+
+    await orm.em.transactional(async () => {
+      await orm.em.findOne(Book, {
+        id: 5,
+      });
+    });
+
+    const unwantedUpdate = loggerMessages.find((message: string) => {
+      return /(update|(update \"test_books\" set \"decimal_amount\" = 11, \"price_amount\" = 10 where \"id\" = 1))/gi.test(
+        message
+      );
+    });
+
+    expect(unwantedUpdate).toBeFalsy();
+  });
+
+  test("should not update book entity when findOne Book when decimals are missing", async () => {
+    await orm.em.transactional(async () => {
+      const user = orm.em.create(User, {
+        id: 6,
+        name: "Foo",
+        email: "foo",
+        decimal: 2,
+      });
+      user.books.add(
+        new Book(6, "book-1", 11, new Money(10, "USD"), user)
+      );
+    });
+
+    orm.em.clear();
+
+    await orm.em.transactional(async () => {
+      await orm.em.findOne(Book, {
+        id: 6,
+      });
+    });
+
+    const unwantedUpdate = loggerMessages.find((message: string) => {
+      return /(update|(update \"test_books\" set \"decimal_amount\" = 11, \"price_amount\" = 10 where \"id\" = 1))/gi.test(
+        message
+      );
+    });
+
+    expect(unwantedUpdate).toBeFalsy();
+  });
+
   test("should not update book entity when findOne a user WITH books", async () => {
     await orm.em.transactional(async () => {
       const user = orm.em.create(User, {

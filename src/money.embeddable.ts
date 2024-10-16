@@ -3,8 +3,7 @@ import { DecimalType, Embeddable, Property } from "@mikro-orm/core";
 @Embeddable()
 export class Money {
   @Property({
-    type: new DecimalType('number'),
-    runtimeType: 'number',
+    type: new DecimalType("number"),
     scale: 2,
   })
   amount: number;
