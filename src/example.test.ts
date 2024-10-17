@@ -1,8 +1,7 @@
-import { Entity, MikroORM, PrimaryKey, Property } from '@mikro-orm/sqlite';
+import { Entity, MikroORM, PrimaryKey, Property } from "@mikro-orm/sqlite";
 
 @Entity()
 class User {
-
   @PrimaryKey()
   id!: number;
 
@@ -16,17 +15,20 @@ class User {
     this.name = name;
     this.email = email;
   }
-
 }
 
 let orm: MikroORM;
+let loggerMessages: string[] = [];
 
 beforeAll(async () => {
   orm = await MikroORM.init({
-    dbName: ':memory:',
+    dbName: ":memory:",
     entities: [User],
-    debug: ['query', 'query-params'],
+    debug: ["query", "query-params"],
     allowGlobalContext: true, // only for testing
+    logger: (message: string) => {
+      loggerMessages.push(message);
+    },
   });
   await orm.schema.refreshDatabase();
 });
@@ -35,17 +37,42 @@ afterAll(async () => {
   await orm.close(true);
 });
 
-test('basic CRUD example', async () => {
-  orm.em.create(User, { name: 'Foo', email: 'foo' });
-  await orm.em.flush();
-  orm.em.clear();
+test("should use logger context label on all transaction operation logs", async () => {
+  await orm.em.transactional(
+    async (em) => {
+      em.create(User, { name: "Foo", email: "foo" });
+    },
+    {
+      loggerContext: {
+        label: "logger-context-label",
+      },
+    }
+  );
 
-  const user = await orm.em.findOneOrFail(User, { email: 'foo' });
-  expect(user.name).toBe('Foo');
-  user.name = 'Bar';
-  orm.em.remove(user);
-  await orm.em.flush();
+  await orm.em.transactional(
+    async (em) => {
+      await em.find(User, { email: "foo" });
+    },
+    {
+      loggerContext: {
+        label: "logger-context-label",
+      },
+    }
+  );
 
-  const count = await orm.em.count(User, { email: 'foo' });
-  expect(count).toBe(0);
+  const logMessagesWithLoggerContextLabel = loggerMessages.filter(
+    (message: string) => {
+      return (
+        /([query](.+)(logger-context-label)(.+)(insert into `user`))/gi.test(
+          message
+        ) ||
+        /([query](.+)(logger-context-label)(.+)(commit))/gi.test(message) ||
+        /([query](.+)(logger-context-label)(.+)(begin))/gi.test(message)
+      );
+    }
+  );
+
+  console.log(loggerMessages);
+
+  expect(logMessagesWithLoggerContextLabel.length).toBeGreaterThan(0);
 });
