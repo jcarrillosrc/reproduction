@@ -13,7 +13,9 @@
   "dependencies": {
     "@mikro-orm/core": "next",
     "@mikro-orm/sqlite": "next",
-    "reflect-metadata": "^0.1.13"
+    "@mikro-orm/postgresql": "next",
+    "reflect-metadata": "^0.1.13",
+    "uuidv7": "^1.0.2"
   },
   "devDependencies": {
     "@types/jest": "^29.5.8",
