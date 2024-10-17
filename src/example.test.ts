@@ -34,10 +34,7 @@ export class MikroormIdentityType<SubType> extends Type<IdentityType, string> {
   }
 
   convertToDatabaseValue(value: IdentityType | string): string {
-    if (typeof value === "object") {
-      if (!(value instanceof IdentityType)) {
-        throw ValidationError.invalidType(MikroormIdentityType, value, "JS");
-      }
+    if (value instanceof IdentityType) {
       return value.toString();
     } else if (typeof value === "string" && value) {
       return value;
@@ -106,10 +103,42 @@ class Book {
   })
   user: User;
 
+  @OneToMany<BookNote, Book>({
+    entity: () => BookNote,
+    mappedBy: (note) => note.book,
+    orderBy: {
+      id: "ASC",
+    },
+  })
+  notes = new Collection<BookNote, this>(this);
+
   constructor(id: IdentityType, name: string, user: User) {
     this.id = id;
     this.name = name;
     this.user = user;
+  }
+}
+
+@Entity({ tableName: "test_books_tags" })
+class BookNote {
+  @PrimaryKey({
+    type: new MikroormIdentityType<IdentityType>(IdentityType),
+  })
+  id: IdentityType = new IdentityType();
+
+  @Property()
+  name: string;
+
+  @ManyToOne<BookNote, Book>({
+    entity: () => Book,
+    inversedBy: (book) => book.notes,
+  })
+  book: Book;
+
+  constructor(id: IdentityType, name: string, book: Book) {
+    this.id = id;
+    this.name = name;
+    this.book = book;
   }
 }
 
@@ -118,7 +147,7 @@ let orm: MikroORM;
 beforeAll(async () => {
   orm = await MikroORM.init({
     dbName: ":memory:",
-    entities: [User, Book],
+    entities: [User, Book, BookNote],
     debug: false,
     allowGlobalContext: true, // only for testing
     forceEntityConstructor: true,
@@ -133,13 +162,20 @@ afterAll(async () => {
 test("should don't throw error on custom type", async () => {
   const userId = new IdentityType();
   const bookId = new IdentityType();
+  const bookNoteId01 = new IdentityType();
+  const bookNoteId02 = new IdentityType();
 
   await orm.em.transactional(async () => {
     const user = orm.em.create(User, {
       id: userId,
       name: "Foo",
     });
-    user.books.add(new Book(bookId, "book-1", user));
+    const book = new Book(bookId, "book-1", user);
+
+    book.notes.add(new BookNote(bookNoteId01, "tag_01", book));
+    book.notes.add(new BookNote(bookNoteId02, "tag_02", book));
+
+    user.books.add(book);
   });
 
   orm.em.clear();
@@ -151,7 +187,7 @@ test("should don't throw error on custom type", async () => {
         id: bookId,
       },
       {
-        populate: ["user"],
+        populate: ["user", "notes"],
       }
     );
   });
